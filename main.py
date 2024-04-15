@@ -3,10 +3,8 @@ import urllib.error
 from urllib.parse import quote
 from bs4 import BeautifulSoup
 import codecs
-
-
-def to_unicode_escape(s):
-    return codecs.unicode_escape_encode(s)[0].decode().replace('\\u', '%u')
+import re
+import openpyxl
 
 
 def ask_url(url):
@@ -28,37 +26,85 @@ def ask_url(url):
     return html
 
 
+pattern = r'sight.*suzhou11'
+city_tag = 'suzhou11'
+
+
 def parse_sight(html):
     soup = BeautifulSoup(html, "lxml")
     divs = soup.find_all('div', class_='list_mod2')
     for div in divs:
-        leftimg_div = div.find('div', class_='leftimg')
-        if not leftimg_div:
+        div = div.find('div', class_='rdetailbox')
+        address = div.find('dd', class_='ellipsis').text.strip()
+        link_name = div.find('a', target='_blank').get('title')
+
+        link = div.find('a', target='_blank').get('href')
+        score_data = div.find('a', class_='score').find('strong')
+        if score_data is not None:
+            try:
+                score = float(score_data.text)
+            except (IndexError, ValueError):
+                score = 0.0
+        else:
+            score = 0.0
+
+        review_count_data = div.find('a', class_='recomment')
+        if review_count_data is not None:
+            try:
+                review_count = re.findall(r'\d+', review_count_data.text)[0]
+            except (IndexError, ValueError):
+                review_count = 0
+        else:
+            review_count = 0
+
+        match = re.search(pattern, link)
+        if not match:
             continue
-        a_tag = leftimg_div.find('a')
-        href = a_tag['href']
+        return {
+            'name': link_name,
+            'address': address,
+            'link': link,
+            'score': score,
+            'review_count': review_count
+        }
+    return None
 
-        print(href)
+def process_url(url):
+    html = ask_url(url)
+    data = parse_sight(html)
+    return data
+
+def to_unicode_escape(s):
+    return codecs.unicode_escape_encode(s)[0].decode().replace('\\u', '%u')
 
 
-with open("html.txt", 'r', encoding='utf-8') as file:
-    parse_sight(file.read())
+with open('sights.txt', 'r', encoding='utf-8') as file:
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet['A1'] = 'Name'
+    worksheet['B1'] = 'Address'
+    worksheet['C1'] = 'Link'
+    worksheet['D1'] = 'Score'
+    worksheet['E1'] = 'Review Count'
 
-#print(quote("鼓浪屿"))
+    row = 2
+    has_data = {}
 
-#print(ask_url("https://you.ctrip.com/sight/Suzhou11.html?keywords=%u9F13%u6D6A%u5C7F"))
+    attractions = file.read().split(' ')
+    for attr in attractions:
+        unicode_name = to_unicode_escape(attr)
+        target_url = 'https://you.ctrip.com/sight/' + city_tag + '.html?keywords=' + quote(unicode_name)
+        data = process_url(target_url)
 
-import re
-
-# 假设 href 是您要判断的链接
-href = 'https://you.ctrip.com/sight/suzhou11/57405.html'
-
-# 使用正则表达式进行匹配
-pattern = r'sight.*suzhou11'
-match = re.search(pattern, href)
-
-# 判断匹配结果
-if match:
-    print("Matched!")
-else:
-    print("Not matched.")
+        if data is None:
+            print(attr + ' not found')
+            continue
+        if data['name'] in has_data:
+            print(attr + ' search to ' + data['name'] + ' already exist')
+            continue
+        has_data[data['name']] = data['name']
+        print(attr + ' search to ' + str(data))
+        for key, value in data.items():
+            worksheet[f"{chr(ord('A') + list(data.keys()).index(key))}{row}"] = value
+        row += 1
+    workbook.save('output.xlsx')
